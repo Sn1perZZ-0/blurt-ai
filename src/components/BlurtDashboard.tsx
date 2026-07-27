@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   XCircle,
   Zap,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,29 +25,28 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useServerFn } from "@tanstack/react-start";
+import { analyzeBlurt, type AnalyzeResult } from "@/lib/analyze.functions";
+import { extractPdfText, fileToDataUrl } from "@/lib/notes-extract";
 
-const MATCHED = [
-  "Defined Photosynthesis correctly",
-  "Chloroplast location in mesophyll cells",
-  "Word equation: CO₂ + H₂O → glucose + O₂",
-];
-
-const MISSED = [
-  "Omitted Light-dependent stage",
-  "Missed ATP definition & role",
-  "No mention of NADPH as reducing agent",
-];
-
-const FEEDBACK = [
-  {
-    title: "Location mix-up",
-    body: "You said Calvin cycle occurs in the thylakoid — it actually happens in the stroma.",
-  },
-  {
-    title: "Terminology",
-    body: "‘Sunlight energy’ is vague. Examiners want ‘light energy absorbed by chlorophyll’.",
-  },
-];
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: SpeechRecEvent) => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecEvent = {
+  resultIndex: number;
+  results: ArrayLike<{
+    0: { transcript: string };
+    isFinal: boolean;
+    length: number;
+  }>;
+};
 
 const BAR_COUNT = 32;
 
@@ -89,6 +89,14 @@ export default function BlurtDashboard() {
   const [analyzed, setAnalyzed] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [fileText, setFileText] = useState<string>("");
+  const [fileImageDataUrl, setFileImageDataUrl] = useState<string | null>(null);
+  const [fileProcessing, setFileProcessing] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [interim, setInterim] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [levels, setLevels] = useState<number[]>(() =>
     Array(BAR_COUNT).fill(0),
   );
@@ -102,6 +110,10 @@ export default function BlurtDashboard() {
   const rafRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const finalTranscriptRef = useRef<string>("");
+
+  const runAnalyze = useServerFn(analyzeBlurt);
 
   const stopEverything = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -123,6 +135,14 @@ export default function BlurtDashboard() {
     }
     audioCtxRef.current = null;
     analyserRef.current = null;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        /* ignore */
+      }
+      recognitionRef.current = null;
+    }
     setLevels(Array(BAR_COUNT).fill(0));
   };
 
@@ -140,7 +160,11 @@ export default function BlurtDashboard() {
   const startRecording = async () => {
     setMicError(null);
     setTranscript("");
+    setInterim("");
+    finalTranscriptRef.current = "";
     setAnalyzed(false);
+    setResult(null);
+    setAnalyzeError(null);
     setSeconds(MAX_SECONDS);
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl);
@@ -202,6 +226,39 @@ export default function BlurtDashboard() {
 
       setRecording(true);
 
+      // Live speech-to-text via Web Speech API (best-effort; not in Firefox).
+      const SR =
+        (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike })
+          .SpeechRecognition ||
+        (window as unknown as {
+          webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+        }).webkitSpeechRecognition;
+      if (SR) {
+        const rec = new SR();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = "en-GB";
+        rec.onresult = (e) => {
+          let interimText = "";
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const r = e.results[i];
+            const t = r[0].transcript;
+            if (r.isFinal) finalTranscriptRef.current += t + " ";
+            else interimText += t;
+          }
+          setTranscript(finalTranscriptRef.current.trim());
+          setInterim(interimText.trim());
+        };
+        rec.onerror = () => {};
+        rec.onend = () => {};
+        try {
+          rec.start();
+          recognitionRef.current = rec;
+        } catch {
+          /* already started */
+        }
+      }
+
       timerRef.current = window.setInterval(() => {
         setSeconds((s) => {
           if (s <= 1) {
@@ -225,6 +282,7 @@ export default function BlurtDashboard() {
   const stopRecording = () => {
     setRecording(false);
     stopEverything();
+    setInterim("");
   };
 
   const toggleRec = () => {
@@ -232,11 +290,76 @@ export default function BlurtDashboard() {
     else void startRecording();
   };
 
+  const handleFile = async (f: File) => {
+    setFileError(null);
+    setFileName(f.name);
+    setFileText("");
+    setFileImageDataUrl(null);
+    setFileProcessing(true);
+    try {
+      if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+        const text = await extractPdfText(f);
+        if (!text) {
+          setFileError(
+            "Couldn't read text from that PDF — it may be scanned. Try pasting the notes instead.",
+          );
+        } else {
+          setFileText(text);
+        }
+      } else if (f.type.startsWith("image/")) {
+        const url = await fileToDataUrl(f);
+        setFileImageDataUrl(url);
+      } else {
+        setFileError("Unsupported file type. Please upload a PDF or image.");
+      }
+    } catch (err) {
+      console.error(err);
+      setFileError("Failed to read the file.");
+    } finally {
+      setFileProcessing(false);
+    }
+  };
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const f = e.dataTransfer.files?.[0];
-    if (f) setFileName(f.name);
+    if (f) void handleFile(f);
+  };
+
+  const onAnalyze = async () => {
+    setAnalyzeError(null);
+    const notesText = mode === "paste" ? notes : fileText;
+    if (!notesText && !fileImageDataUrl) {
+      setAnalyzeError(
+        "Add revision notes first (upload a PDF/image or paste text).",
+      );
+      return;
+    }
+    if (!transcript.trim()) {
+      setAnalyzeError("Record a blurt first — no transcript to analyze.");
+      return;
+    }
+    setAnalyzing(true);
+    setAnalyzed(true);
+    try {
+      const r = await runAnalyze({
+        data: {
+          notes: notesText,
+          imageDataUrl: fileImageDataUrl,
+          transcript,
+          board,
+        },
+      });
+      setResult(r);
+    } catch (err) {
+      console.error(err);
+      setAnalyzeError(
+        err instanceof Error ? err.message : "Analysis failed.",
+      );
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   return (
@@ -367,11 +490,32 @@ export default function BlurtDashboard() {
                   type="file"
                   accept="application/pdf,image/*"
                   className="hidden"
-                  onChange={(e) =>
-                    setFileName(e.target.files?.[0]?.name ?? null)
-                  }
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleFile(f);
+                  }}
                 />
               </div>
+              {fileProcessing && (
+                <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Reading file…
+                </p>
+              )}
+              {fileError && (
+                <p className="mt-3 text-xs text-rose-400">{fileError}</p>
+              )}
+              {fileText && (
+                <p className="mt-3 text-xs text-emerald-400">
+                  Extracted {fileText.length.toLocaleString()} characters from
+                  {" "}
+                  {fileName}.
+                </p>
+              )}
+              {fileImageDataUrl && !fileError && (
+                <p className="mt-3 text-xs text-emerald-400">
+                  Image ready — the AI will OCR it during analysis.
+                </p>
+              )}
             </TabsContent>
 
             <TabsContent value="paste" className="mt-0">
@@ -453,21 +597,36 @@ export default function BlurtDashboard() {
               </div>
               {micError ? (
                 <p className="min-h-[3rem] text-sm text-rose-400">{micError}</p>
-              ) : audioUrl && !recording ? (
-                <audio
-                  controls
-                  src={audioUrl}
-                  className="mt-1 w-full"
-                  preload="metadata"
-                />
               ) : (
-                <p className="min-h-[3rem] text-sm leading-relaxed text-foreground/90">
-                  {transcript || (
-                    <span className="text-muted-foreground">
-                      Tap the mic to record up to 60 seconds of your blurt...
-                    </span>
+                <>
+                  <p className="min-h-[3rem] text-sm leading-relaxed text-foreground/90">
+                    {transcript ? (
+                      <>
+                        <span>{transcript}</span>
+                        {interim && (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            {interim}
+                          </span>
+                        )}
+                      </>
+                    ) : interim ? (
+                      <span className="text-muted-foreground">{interim}</span>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        Tap the mic to record up to 60 seconds of your blurt...
+                      </span>
+                    )}
+                  </p>
+                  {audioUrl && !recording && (
+                    <audio
+                      controls
+                      src={audioUrl}
+                      className="mt-3 w-full"
+                      preload="metadata"
+                    />
                   )}
-                </p>
+                </>
               )}
             </div>
           </div>
@@ -476,12 +635,48 @@ export default function BlurtDashboard() {
         {/* STEP 3 CTA + Results */}
         <div className="space-y-6">
           <Button
-            onClick={() => setAnalyzed(true)}
+            onClick={onAnalyze}
+            disabled={analyzing}
             className="group h-14 w-full rounded-2xl bg-gradient-to-r from-primary to-violet-500 text-base font-semibold shadow-[0_10px_40px_-10px_oklch(0.62_0.22_295/0.6)] transition-all hover:from-primary hover:to-violet-400 hover:shadow-[0_15px_50px_-10px_oklch(0.62_0.22_295/0.8)] sm:h-16 sm:text-lg"
           >
-            <Sparkles className="mr-2 h-5 w-5 transition-transform group-hover:rotate-12" />
-            Analyze My Blurt with AI
+            {analyzing ? (
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+            ) : (
+              <Sparkles className="mr-2 h-5 w-5 transition-transform group-hover:rotate-12" />
+            )}
+            {analyzing ? "Analyzing…" : "Analyze My Blurt with AI"}
           </Button>
+
+          {analyzeError && (
+            <p className="text-center text-sm text-rose-400">{analyzeError}</p>
+          )}
+
+          {result && (
+            <Card className="animate-in fade-in rounded-2xl border-primary/40 bg-primary/10 p-5 duration-500">
+              <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-primary">
+                    Overall Accuracy
+                  </p>
+                  <p className="mt-1 text-sm text-foreground/90">
+                    {result.summary}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <div className="text-5xl font-bold tabular-nums text-primary">
+                    {result.accuracy}
+                    <span className="text-2xl text-muted-foreground">%</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-background/60">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-violet-400 transition-all duration-700"
+                  style={{ width: `${result.accuracy}%` }}
+                />
+              </div>
+            </Card>
+          )}
 
           <div
             className={cn(
@@ -496,10 +691,10 @@ export default function BlurtDashboard() {
                 <h3 className="font-semibold">Covered Key Points</h3>
               </div>
               <Badge className="mb-4 rounded-full bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/20">
-                +3 Marks
+                {result ? `${result.matched.length} hits` : "Awaiting blurt"}
               </Badge>
               <ul className="space-y-2">
-                {MATCHED.map((m) => (
+                {(result?.matched ?? []).map((m) => (
                   <li
                     key={m}
                     className="flex items-start gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-sm"
@@ -508,6 +703,11 @@ export default function BlurtDashboard() {
                     <span>{m}</span>
                   </li>
                 ))}
+                {!result && (
+                  <li className="rounded-xl px-3 py-2 text-sm text-muted-foreground">
+                    Points you recalled correctly will appear here.
+                  </li>
+                )}
               </ul>
             </Card>
 
@@ -518,10 +718,10 @@ export default function BlurtDashboard() {
                 <h3 className="font-semibold">Critical Gaps Missed</h3>
               </div>
               <Badge className="mb-4 rounded-full bg-rose-500/15 text-rose-300 hover:bg-rose-500/20">
-                −2 Marks
+                {result ? `${result.missed.length} gaps` : "Awaiting blurt"}
               </Badge>
               <ul className="space-y-2">
-                {MISSED.map((m) => (
+                {(result?.missed ?? []).map((m) => (
                   <li
                     key={m}
                     className="flex items-start gap-2 rounded-xl bg-rose-500/10 px-3 py-2 text-sm"
@@ -530,6 +730,11 @@ export default function BlurtDashboard() {
                     <span>{m}</span>
                   </li>
                 ))}
+                {!result && (
+                  <li className="rounded-xl px-3 py-2 text-sm text-muted-foreground">
+                    Key points you missed will land here.
+                  </li>
+                )}
               </ul>
             </Card>
 
@@ -543,7 +748,7 @@ export default function BlurtDashboard() {
                 Review
               </Badge>
               <ul className="space-y-2">
-                {FEEDBACK.map((f) => (
+                {(result?.feedback ?? []).map((f) => (
                   <li
                     key={f.title}
                     className="rounded-xl bg-amber-500/10 p-3 text-sm"
@@ -552,6 +757,11 @@ export default function BlurtDashboard() {
                     <p className="mt-1 text-muted-foreground">{f.body}</p>
                   </li>
                 ))}
+                {!result && (
+                  <li className="rounded-xl px-3 py-2 text-sm text-muted-foreground">
+                    Fact checks and phrasing tips will appear here.
+                  </li>
+                )}
               </ul>
             </Card>
           </div>
