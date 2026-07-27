@@ -87,26 +87,23 @@ export default function BlurtDashboard() {
     if (!recording) return;
     const id = setInterval(() => {
       setSeconds((s) => s + 1);
+      const words = [
+        "Photosynthesis",
+        "happens",
+        "in the",
+        "chloroplasts",
+        "of plant",
+        "cells",
+        "using",
+        "light energy",
+        "to convert",
+        "carbon dioxide",
+        "and water",
+        "into glucose",
+        "and oxygen...",
+      ];
       setTranscript((t) =>
-        t.length > 260
-          ? t
-          : t +
-            (t ? " " : "") +
-            [
-              "Photosynthesis",
-              "happens",
-              "in the",
-              "chloroplasts",
-              "of plant",
-              "cells",
-              "using",
-              "light energy",
-              "to convert",
-              "carbon dioxide",
-              "and water",
-              "into glucose",
-              "and oxygen...",
-            ][Math.min(Math.floor(seconds / 1), 12)] ?? "",
+        t.length > 260 ? t : (t ? t + " " : "") + (words[Math.min(seconds, 12)] ?? ""),
       );
     }, 1000);
     return () => clearInterval(id);
