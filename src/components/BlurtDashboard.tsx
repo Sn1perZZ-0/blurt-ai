@@ -48,77 +48,188 @@ const FEEDBACK = [
   },
 ];
 
-function Waveform({ active }: { active: boolean }) {
-  const bars = Array.from({ length: 32 });
+const BAR_COUNT = 32;
+
+function Waveform({
+  active,
+  levels,
+}: {
+  active: boolean;
+  levels: number[];
+}) {
   return (
     <div className="flex h-10 items-center gap-[3px]">
-      {bars.map((_, i) => (
-        <span
-          key={i}
-          className={cn(
-            "w-[3px] rounded-full bg-primary/70 transition-all",
-            active ? "animate-pulse" : "opacity-40",
-          )}
-          style={{
-            height: active
-              ? `${20 + Math.abs(Math.sin((i + 1) * 0.8)) * 70}%`
-              : "18%",
-            animationDelay: `${i * 40}ms`,
-          }}
-        />
-      ))}
+      {Array.from({ length: BAR_COUNT }).map((_, i) => {
+        const v = levels[i] ?? 0;
+        const height = active ? Math.max(8, Math.min(100, v * 100)) : 18;
+        return (
+          <span
+            key={i}
+            className={cn(
+              "w-[3px] rounded-full bg-primary/70 transition-[height] duration-75",
+              !active && "opacity-40",
+            )}
+            style={{ height: `${height}%` }}
+          />
+        );
+      })}
     </div>
   );
 }
+
+const MAX_SECONDS = 60;
 
 export default function BlurtDashboard() {
   const [board, setBoard] = useState("AQA");
   const [mode, setMode] = useState<"upload" | "paste">("upload");
   const [notes, setNotes] = useState("");
   const [recording, setRecording] = useState(false);
-  const [seconds, setSeconds] = useState(0);
+  const [seconds, setSeconds] = useState(MAX_SECONDS);
   const [transcript, setTranscript] = useState("");
   const [analyzed, setAnalyzed] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [levels, setLevels] = useState<number[]>(() =>
+    Array(BAR_COUNT).fill(0),
+  );
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [micError, setMicError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const stopEverything = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      audioCtxRef.current.close().catch(() => {});
+    }
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+    setLevels(Array(BAR_COUNT).fill(0));
+  };
 
   useEffect(() => {
-    if (!recording) return;
-    const id = setInterval(() => {
-      setSeconds((s) => s + 1);
-      const words = [
-        "Photosynthesis",
-        "happens",
-        "in the",
-        "chloroplasts",
-        "of plant",
-        "cells",
-        "using",
-        "light energy",
-        "to convert",
-        "carbon dioxide",
-        "and water",
-        "into glucose",
-        "and oxygen...",
-      ];
-      setTranscript((t) =>
-        t.length > 260 ? t : (t ? t + " " : "") + (words[Math.min(seconds, 12)] ?? ""),
-      );
-    }, 1000);
-    return () => clearInterval(id);
-  }, [recording, seconds]);
+    return () => {
+      stopEverything();
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
   const ss = String(seconds % 60).padStart(2, "0");
 
-  const toggleRec = () => {
-    if (!recording) {
-      setSeconds(0);
-      setTranscript("");
-      setAnalyzed(false);
+  const startRecording = async () => {
+    setMicError(null);
+    setTranscript("");
+    setAnalyzed(false);
+    setSeconds(MAX_SECONDS);
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
     }
-    setRecording((r) => !r);
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia
+    ) {
+      setMicError("Microphone not supported in this browser.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      const ctx = new AudioCtx();
+      audioCtxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.75;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const step = Math.max(1, Math.floor(data.length / BAR_COUNT));
+      const tick = () => {
+        analyser.getByteFrequencyData(data);
+        const next: number[] = [];
+        for (let i = 0; i < BAR_COUNT; i++) {
+          const start = i * step;
+          let sum = 0;
+          for (let j = 0; j < step; j++) sum += data[start + j] ?? 0;
+          next.push(sum / step / 255);
+        }
+        setLevels(next);
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      rafRef.current = requestAnimationFrame(tick);
+
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, {
+          type: mr.mimeType || "audio/webm",
+        });
+        setAudioUrl(URL.createObjectURL(blob));
+      };
+      mr.start();
+
+      setRecording(true);
+
+      timerRef.current = window.setInterval(() => {
+        setSeconds((s) => {
+          if (s <= 1) {
+            stopRecording();
+            return 0;
+          }
+          return s - 1;
+        });
+      }, 1000);
+    } catch (err) {
+      console.error(err);
+      setMicError(
+        err instanceof Error && err.name === "NotAllowedError"
+          ? "Microphone permission denied."
+          : "Could not start recording.",
+      );
+      stopEverything();
+    }
+  };
+
+  const stopRecording = () => {
+    setRecording(false);
+    stopEverything();
+  };
+
+  const toggleRec = () => {
+    if (recording) stopRecording();
+    else void startRecording();
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -322,7 +433,7 @@ export default function BlurtDashboard() {
                 {mm}:{ss}
               </span>
               <div className="flex-1">
-                <Waveform active={recording} />
+                <Waveform active={recording} levels={levels} />
               </div>
             </div>
 
@@ -334,15 +445,30 @@ export default function BlurtDashboard() {
                     recording ? "animate-pulse bg-rose-500" : "bg-muted",
                   )}
                 />
-                Live Transcript
+                {recording
+                  ? `Recording · ${seconds}s left`
+                  : audioUrl
+                    ? "Recording ready"
+                    : "Live Transcript"}
               </div>
-              <p className="min-h-[3rem] text-sm leading-relaxed text-foreground/90">
-                {transcript || (
-                  <span className="text-muted-foreground">
-                    Your spoken text will appear here as you speak...
-                  </span>
-                )}
-              </p>
+              {micError ? (
+                <p className="min-h-[3rem] text-sm text-rose-400">{micError}</p>
+              ) : audioUrl && !recording ? (
+                <audio
+                  controls
+                  src={audioUrl}
+                  className="mt-1 w-full"
+                  preload="metadata"
+                />
+              ) : (
+                <p className="min-h-[3rem] text-sm leading-relaxed text-foreground/90">
+                  {transcript || (
+                    <span className="text-muted-foreground">
+                      Tap the mic to record up to 60 seconds of your blurt...
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
           </div>
         </Card>
