@@ -18,7 +18,6 @@ export async function extractPdfText(file: File): Promise<string> {
       .join(" ");
     out.push(line);
   }
-  await doc.destroy();
   return out.join("\n\n").replace(/\s+\n/g, "\n").trim();
 }
 
