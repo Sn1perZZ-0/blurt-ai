@@ -102,6 +102,8 @@ export default function BlurtDashboard() {
   // -----------------------------
   const [board, setBoard] = useState("AQA");
   const [mode, setMode] = useState<"upload" | "paste">("upload");
+  const [inputMode, setInputMode] = useState<'voice' | 'type'>('voice');
+  const [typedTranscript, setTypedTranscript] = useState('');
   const [notes, setNotes] = useState("");
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(MAX_SECONDS);
@@ -356,8 +358,16 @@ export default function BlurtDashboard() {
       );
       return;
     }
-    if (!transcript.trim()) {
-      setAnalyzeError("Record a blurt first — no transcript to analyze.");
+    
+    // Choose active input depending on mode
+    const finalTranscript = inputMode === "voice" ? transcript : typedTranscript;
+
+    if (!finalTranscript.trim()) {
+      setAnalyzeError(
+        inputMode === "voice"
+          ? "Record a blurt first — no transcript to analyze."
+          : "Type out your blurt first before analyzing."
+      );
       return;
     }
     setAnalyzing(true);
@@ -368,7 +378,7 @@ export default function BlurtDashboard() {
           apiKey: localStorage.getItem("user_openrouter_key") || "",
           notes: notesText,
           imageDataUrl: fileImageDataUrl,
-          transcript,
+          transcript: finalTranscript,
           board,
         },
       });
@@ -580,105 +590,149 @@ export default function BlurtDashboard() {
 
         {/* STEP 2 */}
         <Card className="animate-in fade-in slide-in-from-bottom-2 rounded-2xl border-border/60 bg-card/60 p-5 backdrop-blur-sm duration-500 sm:p-7">
-          <div className="mb-6 flex items-center gap-3">
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/15 text-sm font-bold text-primary ring-1 ring-primary/40">
-              2
-            </span>
-            <div className="min-w-0">
-              <h2 className="truncate text-lg font-semibold sm:text-xl">
-                Start Blurting
-              </h2>
-              <p className="text-xs text-muted-foreground sm:text-sm">
-                Hit record and say everything you remember out loud for 60
-                seconds.
-              </p>
+          <div className="mb-6 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/15 text-sm font-bold text-primary ring-1 ring-primary/40">
+                2
+              </span>
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-semibold sm:text-xl">
+                  Start Blurting
+                </h2>
+                <p className="text-xs text-muted-foreground sm:text-sm">
+                  {inputMode === "voice" 
+                    ? "Hit record and say everything you remember out loud." 
+                    : "Type out everything you remember from memory."}
+                </p>
+              </div>
             </div>
-          </div>
 
-          <div className="flex flex-col items-center gap-6 py-4">
-            <button
-              onClick={toggleRec}
-              className={cn(
-                "group relative grid h-20 w-20 place-items-center rounded-full transition-all",
-                recording
-                  ? "bg-rose-500 shadow-[0_0_0_8px_oklch(0.65_0.24_15/0.15)] hover:shadow-[0_0_0_12px_oklch(0.65_0.24_15/0.2)]"
-                  : "bg-primary shadow-[0_0_0_8px_oklch(0.62_0.22_295/0.2),0_0_40px_oklch(0.62_0.22_295/0.5)] hover:shadow-[0_0_0_12px_oklch(0.62_0.22_295/0.25),0_0_60px_oklch(0.62_0.22_295/0.6)]",
-              )}
-              aria-label={recording ? "Stop recording" : "Start recording"}
-            >
-              {recording && (
-                <span className="absolute inset-0 animate-ping rounded-full bg-rose-500/40" />
-              )}
-              {recording ? (
-                <Square className="h-7 w-7 fill-white text-white" />
-              ) : (
-                <Mic className="h-8 w-8 text-white" />
-              )}
-            </button>
-
-            <div className="flex w-full max-w-md items-center gap-4">
-              <span
+            {/* Mode Switcher Toggle */}
+            <div className="flex rounded-full bg-secondary/60 p-1">
+              <button
+                type="button"
+                onClick={() => setInputMode("voice")}
                 className={cn(
-                  "font-mono text-2xl tabular-nums tracking-tight",
-                  recording ? "text-rose-400" : "text-muted-foreground",
+                  "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                  inputMode === "voice"
+                    ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                {mm}:{ss}
-              </span>
-              <div className="flex-1">
-                <Waveform active={recording} levels={levels} />
-              </div>
-            </div>
-
-            <div className="w-full rounded-2xl border border-border/60 bg-background/40 p-4">
-              <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    recording ? "animate-pulse bg-rose-500" : "bg-muted",
-                  )}
-                />
-                {recording
-                  ? `Recording · ${seconds}s left`
-                  : audioUrl
-                    ? "Recording ready"
-                    : "Live Transcript"}
-              </div>
-              {micError ? (
-                <p className="min-h-[3rem] text-sm text-rose-400">{micError}</p>
-              ) : (
-                <>
-                  <p className="min-h-[3rem] text-sm leading-relaxed text-foreground/90">
-                    {transcript ? (
-                      <>
-                        <span>{transcript}</span>
-                        {interim && (
-                          <span className="text-muted-foreground">
-                            {" "}
-                            {interim}
-                          </span>
-                        )}
-                      </>
-                    ) : interim ? (
-                      <span className="text-muted-foreground">{interim}</span>
-                    ) : (
-                      <span className="text-muted-foreground">
-                        Tap the mic to record up to 60 seconds of your blurt...
-                      </span>
-                    )}
-                  </p>
-                  {audioUrl && !recording && (
-                    <audio
-                      controls
-                      src={audioUrl}
-                      className="mt-3 w-full"
-                      preload="metadata"
-                    />
-                  )}
-                </>
-              )}
+                <Mic className="h-3.5 w-3.5" /> Voice
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode("type")}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                  inputMode === "type"
+                    ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <FileText className="h-3.5 w-3.5" /> Type
+              </button>
             </div>
           </div>
+
+          {inputMode === "voice" ? (
+            /* Voice Recording UI */
+            <div className="flex flex-col items-center gap-6 py-4">
+              <button
+                onClick={toggleRec}
+                className={cn(
+                  "group relative grid h-20 w-20 place-items-center rounded-full transition-all",
+                  recording
+                    ? "bg-rose-500 shadow-[0_0_0_8px_oklch(0.65_0.24_15/0.15)] hover:shadow-[0_0_0_12px_oklch(0.65_0.24_15/0.2)]"
+                    : "bg-primary shadow-[0_0_0_8px_oklch(0.62_0.22_295/0.2),0_0_40px_oklch(0.62_0.22_295/0.5)] hover:shadow-[0_0_0_12px_oklch(0.62_0.22_295/0.25),0_0_60px_oklch(0.62_0.22_295/0.6)]",
+                )}
+                aria-label={recording ? "Stop recording" : "Start recording"}
+              >
+                {recording && (
+                  <span className="absolute inset-0 animate-ping rounded-full bg-rose-500/40" />
+                )}
+                {recording ? (
+                  <Square className="h-7 w-7 fill-white text-white" />
+                ) : (
+                  <Mic className="h-8 w-8 text-white" />
+                )}
+              </button>
+
+              <div className="flex w-full max-w-md items-center gap-4">
+                <span
+                  className={cn(
+                    "font-mono text-2xl tabular-nums tracking-tight",
+                    recording ? "text-rose-400" : "text-muted-foreground",
+                  )}
+                >
+                  {mm}:{ss}
+                </span>
+                <div className="flex-1">
+                  <Waveform active={recording} levels={levels} />
+                </div>
+              </div>
+
+              <div className="w-full rounded-2xl border border-border/60 bg-background/40 p-4">
+                <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      recording ? "animate-pulse bg-rose-500" : "bg-muted",
+                    )}
+                  />
+                  {recording
+                    ? `Recording · ${seconds}s left`
+                    : audioUrl
+                      ? "Recording ready"
+                      : "Live Transcript"}
+                </div>
+                {micError ? (
+                  <p className="min-h-[3rem] text-sm text-rose-400">{micError}</p>
+                ) : (
+                  <>
+                    <p className="min-h-[3rem] text-sm leading-relaxed text-foreground/90">
+                      {transcript ? (
+                        <>
+                          <span>{transcript}</span>
+                          {interim && (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              {interim}
+                            </span>
+                          )}
+                        </>
+                      ) : interim ? (
+                        <span className="text-muted-foreground">{interim}</span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          Tap the mic to record up to 60 seconds of your blurt...
+                        </span>
+                      )}
+                    </p>
+                    {audioUrl && !recording && (
+                      <audio
+                        controls
+                        src={audioUrl}
+                        className="mt-3 w-full"
+                        preload="metadata"
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Typing UI */
+            <div className="py-2">
+              <Textarea
+                value={typedTranscript}
+                onChange={(e) => setTypedTranscript(e.target.value)}
+                placeholder="Type out everything you remember about this topic without looking at your notes..."
+                className="min-h-[220px] resize-none rounded-2xl border-border/70 bg-background/40 p-4 text-sm leading-relaxed focus:ring-2 focus:ring-primary"
+              />
+            </div>
+          )}
         </Card>
 
         {/* STEP 3 CTA + Results */}
