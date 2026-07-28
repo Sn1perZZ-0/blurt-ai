@@ -432,7 +432,7 @@ export default function BlurtDashboard() {
               className="hidden gap-1.5 rounded-full border-primary/40 bg-primary/10 px-3 py-1 text-primary sm:inline-flex"
             >
               <Zap className="h-3 w-3" />
-              Free · 3/3 Blurts
+              Free · Unlimited Blurts
             </Badge>
           </div>
         </div>
