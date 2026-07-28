@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { jsonrepair } from "jsonrepair";
 
 const Input = z.object({
   apiKey: z.string().optional(),
@@ -17,8 +18,9 @@ export type AnalyzeResult = {
   feedback: { title: string; body: string }[];
 };
 
-const SYSTEM = `You are a UK GCSE/A-Level examiner. You mark a student's spoken "blurt" (active recall) against their revision notes.
-Score how much of the key content in the notes the student successfully recalled. Return STRICT JSON only.
+const SYSTEM = `You are a strict UK GCSE/A-Level examiner for the specified exam board. You mark a student's spoken/typed "blurt" (active recall) against their revision notes.
+Score how much of the key content in the notes the student successfully recalled, taking into account specific exam board terminology rules.
+Return STRICT JSON only matching the schema.
 - accuracy: integer 0-100, the percentage of key points from the notes that the student clearly covered in the transcript.
 - summary: one short sentence overall verdict.
 - matched: 3-6 specific points from the notes the student DID say (short bullets).
@@ -29,17 +31,23 @@ If the notes are empty or the transcript is empty/nonsense, set accuracy to 0 an
 export const analyzeBlurt = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => Input.parse(data))
   .handler(async ({ data }): Promise<AnalyzeResult> => {
-    const key = data.apiKey || process.env.OPENROUTER_API_KEY || process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("API Key missing! Please enter your key in the box at the top of the page.");
+    const key =
+      data.apiKey ||
+      process.env.OPENROUTER_API_KEY ||
+      process.env.LOVABLE_API_KEY;
+    if (!key)
+      throw new Error(
+        "API Key missing! Please enter your key in the box at the top of the page."
+      );
 
-    const userText = `Exam board: ${data.board}
+    const userText = `Exam Board: ${data.board}
 
 STUDENT'S NOTES (source of truth):
 """
 ${data.notes || "(no text notes provided — OCR the attached image)"}
 """
 
-STUDENT'S SPOKEN TRANSCRIPT:
+STUDENT'S SPOKEN/TYPED TRANSCRIPT:
 """
 ${data.transcript || "(empty)"}
 """
@@ -56,59 +64,57 @@ Mark the transcript against the notes. Return JSON only.`;
       });
     }
 
-    const res = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify({
-          model: "openrouter/auto",
-          messages: [
-            { role: "system", content: SYSTEM },
-            { role: "user", content },
-          ],
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "blurt_analysis",
-              strict: true,
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  accuracy: { type: "integer", minimum: 0, maximum: 100 },
-                  summary: { type: "string" },
-                  matched: { type: "array", items: { type: "string" } },
-                  missed: { type: "array", items: { type: "string" } },
-                  feedback: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      additionalProperties: false,
-                      properties: {
-                        title: { type: "string" },
-                        body: { type: "string" },
-                      },
-                      required: ["title", "body"],
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash", // Using a consistent, fast model instead of auto-switching
+        temperature: 0.2, // Low temperature for high consistency on re-tests
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "blurt_analysis",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                accuracy: { type: "integer", minimum: 0, maximum: 100 },
+                summary: { type: "string" },
+                matched: { type: "array", items: { type: "string" } },
+                missed: { type: "array", items: { type: "string" } },
+                feedback: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      title: { type: "string" },
+                      body: { type: "string" },
                     },
+                    required: ["title", "body"],
                   },
                 },
-                required: [
-                  "accuracy",
-                  "summary",
-                  "matched",
-                  "missed",
-                  "feedback",
-                ],
               },
+              required: [
+                "accuracy",
+                "summary",
+                "matched",
+                "missed",
+                "feedback",
+              ],
             },
           },
-        }),
-      },
-    );
+        },
+      }),
+    });
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -122,6 +128,11 @@ Mark the transcript against the notes. Return JSON only.`;
     const json = (await res.json()) as {
       choices: { message: { content: string } }[];
     };
-    const text = json.choices?.[0]?.message?.content ?? "{}";
-    return JSON.parse(text) as AnalyzeResult;
+    const rawText = json.choices?.[0]?.message?.content ?? "{}";
+
+    try {
+      return JSON.parse(jsonrepair(rawText)) as AnalyzeResult;
+    } catch {
+      throw new Error("Failed to parse analysis results. Please try again.");
+    }
   });
