@@ -23,9 +23,9 @@ Score how much of the key content in the notes the student successfully recalled
 Return STRICT JSON only matching the schema.
 - accuracy: integer 0-100, the percentage of key points from the notes that the student clearly covered in the transcript.
 - summary: one short sentence overall verdict.
-- matched: 3-6 specific points from the notes the student DID say (short bullets).
-- missed: 3-6 specific points from the notes the student did NOT say but should have (short bullets).
-- feedback: 1-3 items flagging factual errors, vague wording, or mix-ups in the transcript. Each has title (3-6 words) and body (one sentence).
+- matched: specific points from the notes the student DID say (short bullets).
+- missed: specific points from the notes the student did NOT say but should have (short bullets).
+- feedback: flag any factual errors, vague wording, or mix-ups in the transcript. Include as many items as necessary (or an empty array [] if there are no errors or tips). Each item has title (3-6 words) and body (one sentence).
 If the notes are empty or the transcript is empty/nonsense, set accuracy to 0 and explain in summary.`;
 
 export const analyzeBlurt = createServerFn({ method: "POST" })
@@ -39,6 +39,12 @@ export const analyzeBlurt = createServerFn({ method: "POST" })
       throw new Error(
         "API Key missing! Please enter your key in the box at the top of the page."
       );
+
+    // Dynamic model selection:
+    // Gemma 4 26B (Vision/Multimodal) for images/OCR, Ling 3.0 Flash for pure text
+    const selectedModel = data.imageDataUrl
+      ? "google/gemma-4-26b-a4b-it:free"
+      : "inclusionai/ling-3.0-flash:free";
 
     const userText = `Exam Board: ${data.board}
 
@@ -57,6 +63,7 @@ Mark the transcript against the notes. Return JSON only.`;
     const content: Array<Record<string, unknown>> = [
       { type: "text", text: userText },
     ];
+
     if (data.imageDataUrl) {
       content.push({
         type: "image_url",
@@ -71,8 +78,8 @@ Mark the transcript against the notes. Return JSON only.`;
         Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash", // Using a consistent, fast model instead of auto-switching
-        temperature: 0.2, // Low temperature for high consistency on re-tests
+        model: selectedModel,
+        temperature: 0.2, // Low temperature for high scoring consistency
         messages: [
           { role: "system", content: SYSTEM },
           { role: "user", content },
@@ -119,9 +126,9 @@ Mark the transcript against the notes. Return JSON only.`;
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       if (res.status === 429)
-        throw new Error("Rate limited by AI gateway — try again shortly.");
+        throw new Error("Rate limited by free AI gateway — try again shortly.");
       if (res.status === 402)
-        throw new Error("AI credits exhausted for this workspace.");
+        throw new Error("AI credits exhausted or limit reached for this key.");
       throw new Error(`AI request failed: ${res.status} ${body}`);
     }
 
