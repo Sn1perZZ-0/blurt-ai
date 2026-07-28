@@ -20,13 +20,19 @@ export type AnalyzeResult = {
 
 const SYSTEM = `You are a strict UK GCSE/A-Level examiner for the specified exam board. You mark a student's spoken/typed "blurt" (active recall) against their revision notes.
 Score how much of the key content in the notes the student successfully recalled, taking into account specific exam board terminology rules.
-Return STRICT JSON only matching the schema.
-- accuracy: integer 0-100, the percentage of key points from the notes that the student clearly covered in the transcript.
-- summary: one short sentence overall verdict.
-- matched: specific points from the notes the student DID say (short bullets).
-- missed: specific points from the notes the student did NOT say but should have (short bullets).
-- feedback: flag any factual errors, vague wording, or mix-ups in the transcript. Include as many items as necessary (or an empty array [] if there are no errors or tips). Each item has title (3-6 words) and body (one sentence).
-If the notes are empty or the transcript is empty/nonsense, set accuracy to 0 and explain in summary.`;
+
+You MUST reply with ONLY a valid raw JSON object. Do NOT include markdown codeblocks or extra text.
+JSON Structure:
+{
+  "accuracy": 85,
+  "summary": "One sentence summary verdict.",
+  "matched": ["point 1", "point 2"],
+  "missed": ["point 1", "point 2"],
+  "feedback": [{"title": "3-6 words error", "body": "one sentence explanation"}]
+}
+
+- feedback: flag any factual errors, vague wording, or mix-ups in the transcript. Include as many items as necessary (or an empty array [] if there are no errors).
+If the notes are empty or transcript is empty/nonsense, set accuracy to 0 and explain in summary.`;
 
 export const analyzeBlurt = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => Input.parse(data))
@@ -40,12 +46,6 @@ export const analyzeBlurt = createServerFn({ method: "POST" })
         "API Key missing! Please enter your key in the box at the top of the page."
       );
 
-    // Dynamic model selection:
-    // Gemma 4 26B (Vision/Multimodal) for images/OCR, Ling 3.0 Flash for pure text
-    const selectedModel = data.imageDataUrl
-      ? "google/gemma-4-26b-a4b-it:free"
-      : "inclusionai/ling-3.0-flash:free";
-
     const userText = `Exam Board: ${data.board}
 
 STUDENT'S NOTES (source of truth):
@@ -58,7 +58,7 @@ STUDENT'S SPOKEN/TYPED TRANSCRIPT:
 ${data.transcript || "(empty)"}
 """
 
-Mark the transcript against the notes. Return JSON only.`;
+Mark the transcript against the notes. Return raw JSON only.`;
 
     const content: Array<Record<string, unknown>> = [
       { type: "text", text: userText },
@@ -78,13 +78,12 @@ Mark the transcript against the notes. Return JSON only.`;
         Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: selectedModel,
-        temperature: 0.2, // Low temperature for high scoring consistency
+        model: "openrouter/free",
+        temperature: 0.2,
         messages: [
           { role: "system", content: SYSTEM },
           { role: "user", content },
         ],
-        response_format: { type: "json_object" },
       }),
     });
 
