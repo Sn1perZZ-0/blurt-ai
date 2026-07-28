@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 const Input = z.object({
+  apiKey: z.string().optional(),
   notes: z.string().default(""),
   imageDataUrl: z.string().optional().nullable(),
   transcript: z.string(),
@@ -28,8 +29,8 @@ If the notes are empty or the transcript is empty/nonsense, set accuracy to 0 an
 export const analyzeBlurt = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => Input.parse(data))
   .handler(async ({ data }): Promise<AnalyzeResult> => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("LOVABLE_API_KEY missing");
+    const key = data.apiKey || process.env.OPENROUTER_API_KEY || process.env.LOVABLE_API_KEY;
+    if (!key) throw new Error("API Key missing! Please enter your key in the box at the top of the page.");
 
     const userText = `Exam board: ${data.board}
 
@@ -56,7 +57,7 @@ Mark the transcript against the notes. Return JSON only.`;
     }
 
     const res = await fetch(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
+      "https://openrouter.ai/api/v1/chat/completions",
       {
         method: "POST",
         headers: {
@@ -64,7 +65,7 @@ Mark the transcript against the notes. Return JSON only.`;
           Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify({
-          model: "openai/gpt-5.5",
+          model: "openrouter/auto",
           messages: [
             { role: "system", content: SYSTEM },
             { role: "user", content },

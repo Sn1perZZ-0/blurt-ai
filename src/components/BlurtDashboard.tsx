@@ -77,9 +77,29 @@ function Waveform({
   );
 }
 
-const MAX_SECONDS = 60;
+const MAX_SECONDS = 3600;
 
 export default function BlurtDashboard() {
+  // --- API KEY STATE & LOGIC ---
+  const [apiKey, setApiKey] = useState("");
+  const [keySaved, setKeySaved] = useState(false);
+
+  useEffect(() => {
+    const savedKey = localStorage.getItem("user_openrouter_key");
+    if (savedKey) {
+      setApiKey(savedKey);
+      setKeySaved(true);
+    }
+  }, []);
+
+  const handleSaveKey = () => {
+    if (apiKey.trim()) {
+      localStorage.setItem("user_openrouter_key", apiKey.trim());
+      setKeySaved(true);
+      alert("API Key saved locally!");
+    }
+  };
+  // -----------------------------
   const [board, setBoard] = useState("AQA");
   const [mode, setMode] = useState<"upload" | "paste">("upload");
   const [notes, setNotes] = useState("");
@@ -327,7 +347,7 @@ export default function BlurtDashboard() {
     if (f) void handleFile(f);
   };
 
-  const onAnalyze = async () => {
+ const onAnalyze = async () => {
     setAnalyzeError(null);
     const notesText = mode === "paste" ? notes : fileText;
     if (!notesText && !fileImageDataUrl) {
@@ -345,6 +365,7 @@ export default function BlurtDashboard() {
     try {
       const r = await runAnalyze({
         data: {
+          apiKey: localStorage.getItem("user_openrouter_key") || "",
           notes: notesText,
           imageDataUrl: fileImageDataUrl,
           transcript,
@@ -371,6 +392,7 @@ export default function BlurtDashboard() {
       </div>
 
       {/* NAVBAR */}
+    
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 sm:flex sm:justify-between">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -405,7 +427,34 @@ export default function BlurtDashboard() {
           </div>
         </div>
       </header>
-
+{/* --- API KEY BANNER --- */}
+    <Card className="p-4 mb-6 bg-muted/50 border-primary/20">
+      <div className="flex flex-col sm:flex-row items-center gap-3">
+        <div className="flex-1 w-full">
+          <label className="text-xs font-semibold text-muted-foreground block mb-1">
+            OpenRouter API Key
+          </label>
+          <input
+            type="password"
+            placeholder="sk-or-v1-..."
+            value={apiKey}
+            onChange={(e) => {
+              setApiKey(e.target.value);
+              setKeySaved(false);
+            }}
+            className="w-full px-3 py-2 text-sm rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+        <Button 
+          onClick={handleSaveKey} 
+          variant={keySaved ? "outline" : "default"}
+          className="w-full sm:w-auto mt-auto"
+        >
+          {keySaved ? "Saved ✅" : "Save Key"}
+        </Button>
+      </div>
+    </Card>
+    {/* --------------------- */}
       <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:py-10">
         {/* Hero */}
         <section className="animate-in fade-in slide-in-from-bottom-2 duration-500">
