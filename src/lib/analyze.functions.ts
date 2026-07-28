@@ -21,7 +21,7 @@ export type AnalyzeResult = {
 const SYSTEM = `You are a strict UK GCSE/A-Level examiner for the specified exam board. You mark a student's spoken/typed "blurt" (active recall) against their revision notes.
 Score how much of the key content in the notes the student successfully recalled, taking into account specific exam board terminology rules.
 
-You MUST reply with ONLY a valid raw JSON object. Do NOT include markdown codeblocks or extra text.
+You MUST reply with ONLY a valid raw JSON object. Do NOT include markdown blocks or extra text.
 JSON Structure:
 {
   "accuracy": 85,
@@ -45,6 +45,11 @@ export const analyzeBlurt = createServerFn({ method: "POST" })
       throw new Error(
         "API Key missing! Please enter your key in the box at the top of the page."
       );
+
+    // Dynamic model selection: Nemotron 120B for text grading, Gemma 4 for vision/OCR
+    const selectedModel = data.imageDataUrl
+      ? "google/gemma-4-26b-a4b-it:free"
+      : "nvidia/nemotron-3-super-120b-a12b:free";
 
     const userText = `Exam Board: ${data.board}
 
@@ -78,8 +83,8 @@ Mark the transcript against the notes. Return raw JSON only.`;
         Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: "openrouter/free",
-        temperature: 0.2,
+        model: selectedModel,
+        temperature: 0.2, // Keeps scores steady across re-tests
         messages: [
           { role: "system", content: SYSTEM },
           { role: "user", content },
