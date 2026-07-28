@@ -84,42 +84,7 @@ Mark the transcript against the notes. Return JSON only.`;
           { role: "system", content: SYSTEM },
           { role: "user", content },
         ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "blurt_analysis",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                accuracy: { type: "integer", minimum: 0, maximum: 100 },
-                summary: { type: "string" },
-                matched: { type: "array", items: { type: "string" } },
-                missed: { type: "array", items: { type: "string" } },
-                feedback: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    additionalProperties: false,
-                    properties: {
-                      title: { type: "string" },
-                      body: { type: "string" },
-                    },
-                    required: ["title", "body"],
-                  },
-                },
-              },
-              required: [
-                "accuracy",
-                "summary",
-                "matched",
-                "missed",
-                "feedback",
-              ],
-            },
-          },
-        },
+        response_format: { type: "json_object" },
       }),
     });
 
