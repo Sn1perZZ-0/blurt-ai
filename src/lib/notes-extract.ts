@@ -3,19 +3,21 @@
 export async function extractPdfText(file: File): Promise<string> {
   const pdfjs = await import("pdfjs-dist");
 
-  // Load worker locally via bundled worker module (Works on BOTH PC & Mobile)
-  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.mjs",
-      import.meta.url
-    ).toString();
-  }
+  // Load exact version-matched worker via HTTPS CDN to prevent iOS worker bundle crashes
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
-  // Convert to Uint8Array for iOS Safari/WebKit memory safety
+  // 1. Read arrayBuffer and convert to Uint8Array for Safari WebKit safety
   const arrayBuffer = await file.arrayBuffer();
   const typedArray = new Uint8Array(arrayBuffer);
 
-  const doc = await pdfjs.getDocument({ data: typedArray }).promise;
+  // 2. Load document using typed array
+  const loadingTask = pdfjs.getDocument({
+    data: typedArray,
+    useSystemFonts: true, // Prevents iOS font rendering freezes
+    disableFontFace: true,
+  });
+
+  const doc = await loadingTask.promise;
   const out: string[] = [];
   const max = Math.min(doc.numPages, 30);
 
