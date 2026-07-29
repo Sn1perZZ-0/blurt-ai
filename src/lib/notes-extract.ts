@@ -1,20 +1,21 @@
 // Client-side helpers: PDF -> text, image -> data URL.
 
 export async function extractPdfText(file: File): Promise<string> {
-  const pdfjs = await import("pdfjs-dist");
+  // Use legacy build for maximum cross-browser/iOS Safari compatibility
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
-  // Load exact version-matched worker via HTTPS CDN to prevent iOS worker bundle crashes
-  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  // Disable Web Worker creation entirely to bypass mobile Safari security blocks
+  pdfjs.GlobalWorkerOptions.workerSrc = "";
 
-  // 1. Read arrayBuffer and convert to Uint8Array for Safari WebKit safety
+  // Convert file stream to Uint8Array for Safari memory safety
   const arrayBuffer = await file.arrayBuffer();
   const typedArray = new Uint8Array(arrayBuffer);
 
-  // 2. Load document using typed array
   const loadingTask = pdfjs.getDocument({
     data: typedArray,
-    useSystemFonts: true, // Prevents iOS font rendering freezes
+    useSystemFonts: true,
     disableFontFace: true,
+    isEvalSupported: false,
   });
 
   const doc = await loadingTask.promise;
@@ -25,7 +26,7 @@ export async function extractPdfText(file: File): Promise<string> {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
     const line = content.items
-      .map((it) => ("str" in it ? (it as { str: string }).str : ""))
+      .map((it: any) => ("str" in it ? it.str : ""))
       .join(" ");
     out.push(line);
   }
