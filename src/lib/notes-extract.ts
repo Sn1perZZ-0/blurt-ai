@@ -3,38 +3,57 @@
 export async function extractPdfText(file: File): Promise<string> {
   const pdfjs = await import("pdfjs-dist");
 
-  // Read arrayBuffer and convert to Uint8Array for WebKit memory safety
-  const arrayBuffer = await file.arrayBuffer();
-  const typedArray = new Uint8Array(arrayBuffer);
-
   try {
-    // Attempt standard worker setup
-    pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+    const typedArray = await readFileAsUint8Array(file);
+    const workerUrl = (await import(
+      "pdfjs-dist/build/pdf.worker.min.mjs?url"
+    )) as { default: string };
+
+    pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.default;
+    const worker = pdfjs.PDFWorker.create({ name: "blurt-pdf-worker" });
 
     const loadingTask = pdfjs.getDocument({
       data: typedArray,
       useSystemFonts: true,
       disableFontFace: true,
-      isEvalSupported: false, // Prevents iOS Safari CSP evaluation blocks
+      worker,
     });
 
     const doc = await loadingTask.promise;
-    return await parseDocPages(doc);
-  } catch (workerErr) {
-    console.warn("Worker execution failed on mobile, falling back to main-thread processing:", workerErr);
-
-    // Fallback: Disable worker completely for mobile WebKit compatibility
-    const fallbackTask = pdfjs.getDocument({
-      data: typedArray,
-      useSystemFonts: true,
-      disableFontFace: true,
-      isEvalSupported: false,
-    });
-
-    // Force pdfjs to resolve on the main thread
-    const doc = await fallbackTask.promise;
-    return await parseDocPages(doc);
+    try {
+      return await parseDocPages(doc);
+    } finally {
+      await doc.cleanup();
+      worker.destroy();
+    }
+  } catch (err) {
+    console.error("PDF extraction failed:", err);
+    throw err;
   }
+}
+
+async function readFileAsUint8Array(file: File): Promise<Uint8Array> {
+  try {
+    return new Uint8Array(await file.arrayBuffer());
+  } catch {
+    return new Uint8Array(await fileReaderToArrayBuffer(file));
+  }
+}
+
+function fileReaderToArrayBuffer(file: File): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (result instanceof ArrayBuffer) {
+        resolve(result);
+      } else {
+        reject(new Error("FileReader did not return an ArrayBuffer."));
+      }
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 async function parseDocPages(doc: any): Promise<string> {
