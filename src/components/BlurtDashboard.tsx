@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Activity,
   Upload,
   FileText,
   Mic,
@@ -406,9 +405,11 @@ export default function BlurtDashboard() {
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 sm:flex sm:justify-between">
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/15 ring-1 ring-primary/40">
-              <Activity className="h-5 w-5 text-primary drop-shadow-[0_0_8px_oklch(0.62_0.22_295)]" />
-            </div>
+            <img
+              src="/logo.png"
+              alt="BlurtAI logo"
+              className="h-9 w-9 shrink-0 rounded-full object-cover"
+            />
             <span className="truncate text-lg font-bold tracking-tight">
               Blurt<span className="text-primary">AI</span>
             </span>
